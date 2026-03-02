@@ -1,12 +1,26 @@
 const express = require("express");
 const router = express.Router();
+const mongoose = require("mongoose");
+
 const crimeMap = require("../data/crimeMap");
 const FIR = require("../models/FIR");
+const detectCrimeType = require("../AI/classifier");
+const authMiddleware = require("../middleware/authMiddleware");
 
-// POST → Generate FIR
-router.post("/generate-fir", async (req, res) => {
+
+/* =====================================================
+   ✅ POST → Generate FIR (Citizen Only)
+===================================================== */
+router.post("/generate-fir", authMiddleware, async (req, res) => {
   try {
-    // 1️⃣ Extract data from request body
+
+    if (req.user.role !== "Citizen") {
+      return res.status(403).json({
+        success: false,
+        message: "Only citizens can generate FIR"
+      });
+    }
+
     const {
       name,
       crimeType,
@@ -17,13 +31,11 @@ router.post("/generate-fir", async (req, res) => {
       conditions = {}
     } = req.body;
 
-    // 2️⃣ Validate crime type
     const crime = crimeMap[crimeType];
     if (!crime) {
       return res.status(400).json({ error: "Invalid crime type" });
     }
 
-    // 3️⃣ Collect applicable sections
     let sections = [...crime.defaultSections];
     let explanations = [
       {
@@ -32,7 +44,6 @@ router.post("/generate-fir", async (req, res) => {
       }
     ];
 
-    // 4️⃣ Apply conditions
     if (crime.conditions) {
       for (let condition in conditions) {
         if (conditions[condition] && crime.conditions[condition]) {
@@ -45,10 +56,8 @@ router.post("/generate-fir", async (req, res) => {
       }
     }
 
-    // 5️⃣ Remove duplicates
     sections = [...new Set(sections)];
 
-    // 6️⃣ Generate FIR draft
     const firDraft = `
 I, ${name}, wish to state that on ${date} at approximately ${time},
 at ${location}, the following incident took place:
@@ -58,13 +67,11 @@ at ${location}, the following incident took place:
 The above act discloses the commission of offences punishable under
 ${sections.join(", ")} of the Bharatiya Nyaya Sanhita, 2023.
 
-I request you to kindly register an FIR and take necessary legal action
-in accordance with law.
+I request you to kindly register an FIR and take necessary legal action.
 
 I am ready to cooperate with the investigation.
     `.trim();
 
-    // 7️⃣ Save FIR to MongoDB
     const newFIR = new FIR({
       name,
       crimeType,
@@ -73,12 +80,12 @@ I am ready to cooperate with the investigation.
       date,
       time,
       sectionsApplied: sections,
-      firDraft
+      firDraft,
+      user: req.user.id   // 🔐 attach logged-in user
     });
 
     await newFIR.save();
 
-    // 8️⃣ Send response
     res.json({
       success: true,
       firId: newFIR._id,
@@ -96,15 +103,13 @@ I am ready to cooperate with the investigation.
 });
 
 
-// GET → Fetch FIR by ID
-const mongoose = require("mongoose");
-
-
-router.get("/firs/:id", async (req, res) => {
+/* =====================================================
+   ✅ GET → Fetch FIR by ID (Owner or Police)
+===================================================== */
+router.get("/firs/:id", authMiddleware, async (req, res) => {
   try {
     const id = req.params.id.trim();
 
-    // ✅ Validate ObjectId
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({
         success: false,
@@ -121,26 +126,41 @@ router.get("/firs/:id", async (req, res) => {
       });
     }
 
+    // 🔐 Ownership check
+    if (
+      req.user.role === "Citizen" &&
+      fir.user.toString() !== req.user.id
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied"
+      });
+    }
+
     res.json({
       success: true,
       data: fir
     });
 
   } catch (error) {
-    console.error("Error in GET /firs/:id:", error);
-
-    res.status(500).json({
-      success: false,
-      message: "Server error",
-      error: error.message
-    });
+    res.status(500).json({ success: false, message: "Server error" });
   }
 });
 
 
-// PATCH → Update FIR Status
-router.patch("/firs/:id/status", async (req, res) => {
+/* =====================================================
+   ✅ PATCH → Update FIR Status (Police Only)
+===================================================== */
+router.patch("/firs/:id/status", authMiddleware, async (req, res) => {
   try {
+
+    if (req.user.role !== "Police") {
+      return res.status(403).json({
+        success: false,
+        message: "Only police can update FIR status"
+      });
+    }
+
     const id = req.params.id.trim();
     const { status } = req.body;
 
@@ -153,7 +173,6 @@ router.patch("/firs/:id/status", async (req, res) => {
       "Rejected"
     ];
 
-    // Validate status
     if (!allowedStatuses.includes(status)) {
       return res.status(400).json({
         success: false,
@@ -161,7 +180,6 @@ router.patch("/firs/:id/status", async (req, res) => {
       });
     }
 
-    // Find FIR first
     const fir = await FIR.findById(id);
 
     if (!fir) {
@@ -171,7 +189,6 @@ router.patch("/firs/:id/status", async (req, res) => {
       });
     }
 
-    // Prevent duplicate status update
     if (fir.status === status) {
       return res.status(400).json({
         success: false,
@@ -179,70 +196,46 @@ router.patch("/firs/:id/status", async (req, res) => {
       });
     }
 
-    // Push history record
     fir.statusHistory.push({
       from: fir.status,
       to: status,
-      updatedBy: "Police Officer" // later from auth
+      updatedBy: req.user.role
     });
 
-    // Update status
     fir.status = status;
-
     await fir.save();
 
     res.json({
       success: true,
       message: "FIR status updated successfully",
       firId: fir._id,
-      previousStatus: fir.statusHistory.slice(-1)[0].from,
       newStatus: fir.status
     });
 
   } catch (error) {
-    console.error("Error in PATCH:", error);
-
-    res.status(500).json({
-      success: false,
-      message: "Server error",
-      error: error.message
-    });
+    res.status(500).json({ success: false, message: "Server error" });
   }
 });
 
-const detectCrimeType = require("../AI/classifier");
 
-router.post("/ai/predict-crime", (req, res) => {
-  const { description } = req.body;
-
-  if (!description) {
-    return res.status(400).json({
-      success: false,
-      message: "Description required"
-    });
-  }
-
-  const result = detectCrimeType(description);
-
-  if (!result.crimeType) {
-    return res.json({
-      success: true,
-      prediction: null,
-      message: "Could not detect crime type"
-    });
-  }
-
-  res.json({
-    success: true,
-    prediction: result
-  });
-});
-
-router.get("/firs", async (req, res) => {
+/* =====================================================
+   ✅ GET → List FIRs
+   Citizen → Only Own
+   Police → All
+===================================================== */
+router.get("/firs", authMiddleware, async (req, res) => {
   try {
     const { status, page = 1, limit = 5 } = req.query;
 
-    const query = status ? { status } : {};
+    let query = {};
+
+    if (req.user.role === "Citizen") {
+      query.user = req.user.id;
+    }
+
+    if (req.user.role === "Police" && status) {
+      query.status = status;
+    }
 
     const firs = await FIR.find(query)
       .skip((page - 1) * limit)
@@ -259,19 +252,26 @@ router.get("/firs", async (req, res) => {
     });
 
   } catch (error) {
-    console.error("Error fetching FIR list:", error);
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
 
 
-// DELETE → Delete FIR by ID
-router.delete("/firs/:id", async (req, res) => {
+/* =====================================================
+   ✅ DELETE → FIR (Police Only)
+===================================================== */
+router.delete("/firs/:id", authMiddleware, async (req, res) => {
   try {
+
+    if (req.user.role !== "Police") {
+      return res.status(403).json({
+        success: false,
+        message: "Only police can delete FIR"
+      });
+    }
+
     const id = req.params.id.trim();
 
-    // Validate ObjectId
-    const mongoose = require("mongoose");
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({
         success: false,
@@ -279,7 +279,6 @@ router.delete("/firs/:id", async (req, res) => {
       });
     }
 
-    // Delete FIR
     const deletedFIR = await FIR.findByIdAndDelete(id);
 
     if (!deletedFIR) {
@@ -291,63 +290,34 @@ router.delete("/firs/:id", async (req, res) => {
 
     res.json({
       success: true,
-      message: "FIR deleted successfully",
-      deletedId: deletedFIR._id
+      message: "FIR deleted successfully"
     });
 
   } catch (error) {
-    console.error("Error deleting FIR:", error);
-    res.status(500).json({
-      success: false,
-      message: "Server error",
-      error: error.message
-    });
+    res.status(500).json({ success: false, message: "Server error" });
   }
 });
 
-// SEARCH → Find FIRs with filters
-router.get("/firs/search", async (req, res) => {
-  try {
-    const {
-      name,
-      crimeType,
-      status,
-      location,
-      fromDate,
-      toDate
-    } = req.query;
 
-    let filter = {};
+/* =====================================================
+   ✅ AI Crime Prediction (Protected)
+===================================================== */
+router.post("/ai/predict-crime", authMiddleware, (req, res) => {
+  const { description } = req.body;
 
-    // Dynamic filters
-    if (name) filter.name = { $regex: name, $options: "i" };
-    if (crimeType) filter.crimeType = crimeType;
-    if (status) filter.status = status;
-    if (location) filter.location = { $regex: location, $options: "i" };
-
-    // Date range filter
-    if (fromDate || toDate) {
-      filter.createdAt = {};
-      if (fromDate) filter.createdAt.$gte = new Date(fromDate);
-      if (toDate) filter.createdAt.$lte = new Date(toDate);
-    }
-
-    const results = await FIR.find(filter).sort({ createdAt: -1 });
-
-    res.json({
-      success: true,
-      count: results.length,
-      data: results
-    });
-
-  } catch (error) {
-    console.error("Search FIR error:", error);
-    res.status(500).json({
+  if (!description) {
+    return res.status(400).json({
       success: false,
-      message: "Server error",
-      error: error.message
+      message: "Description required"
     });
   }
+
+  const result = detectCrimeType(description);
+
+  res.json({
+    success: true,
+    prediction: result || null
+  });
 });
 
 
