@@ -2,7 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const connectDB = require("./db");   // 👈 THIS LINE
 
-const firRoutes = require("./routes/firRoutes");
+const firRoutes = require("./routes/userRoutes");
 
 const app = express();
 
