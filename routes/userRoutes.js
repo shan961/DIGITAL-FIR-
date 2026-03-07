@@ -90,5 +90,30 @@ router.get(
     });
   }
 );
+ 
+// USER TRACK FIR STATUS
+router.get("/my-firs", authMiddleware, async (req, res) => {
+  try {
 
+    const firs = await FIR.find({ createdBy: req.user.id });
+
+    if (!firs.length) {
+      return res.status(404).json({
+        success: false,
+        message: "No FIRs found"
+      });
+    }
+
+    res.json({
+      success: true,
+      firs
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Server error"
+    });
+  }
+});
 module.exports = router;
