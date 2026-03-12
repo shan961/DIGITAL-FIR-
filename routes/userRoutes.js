@@ -7,23 +7,25 @@ const detectCrimeType = require("../AI/classifier");
 
 /* =====================================
    GENERATE FIR
-=========================================*/
+===================================== */
 router.post(
   "/generate-fir",
   authMiddleware,
   roleMiddleware(["User"]),
   async (req, res) => {
     try {
-      const { description } = req.body;
 
-      if (!description) {
+      const { name, description } = req.body;
+
+      // Validate input
+      if (!name || !description) {
         return res.status(400).json({
           success: false,
-          message: "Description required"
+          message: "Name and description are required"
         });
       }
 
-      // 🔥 AI Prediction
+      // Detect crime type using AI
       const prediction = detectCrimeType(description);
 
       if (!prediction || !prediction.crimeType) {
@@ -33,10 +35,28 @@ router.post(
         });
       }
 
+      // Generate FIR draft automatically
+      const firDraft = `
+Complaint by ${name}.
+
+Incident Description:
+${description}
+
+AI Detected Crime Type: ${prediction.crimeType}
+
+Applicable Sections:
+${prediction.sections ? prediction.sections.join(", ") : "Not available"}
+
+This complaint has been recorded in the system.
+`;
+
+      // Create FIR
       const newFIR = new FIR({
-        ...req.body,
+        name,
+        description,
+        firDraft,
         crimeType: prediction.crimeType,
-        sectionsApplied: prediction.sections,
+        sectionsApplied: prediction.sections || [],
         user: req.user.id
       });
 
@@ -44,15 +64,22 @@ router.post(
 
       res.json({
         success: true,
+        message: "FIR generated successfully",
         aiPrediction: prediction,
         data: newFIR
       });
 
     } catch (error) {
-      res.status(500).json({ success: false });
+      console.error("Generate FIR Error:", error);
+
+      res.status(500).json({
+        success: false,
+        message: error.message
+      });
     }
   }
 );
+
 /* =====================================
    VIEW OWN FIRs
 ===================================== */
@@ -62,6 +89,7 @@ router.get(
   roleMiddleware(["User"]),
   async (req, res) => {
     try {
+
       const firs = await FIR.find({ user: req.user.id }).sort({ createdAt: -1 });
 
       res.json({
@@ -90,30 +118,5 @@ router.get(
     });
   }
 );
- 
-// USER TRACK FIR STATUS
-router.get("/my-firs", authMiddleware, async (req, res) => {
-  try {
 
-    const firs = await FIR.find({ createdBy: req.user.id });
-
-    if (!firs.length) {
-      return res.status(404).json({
-        success: false,
-        message: "No FIRs found"
-      });
-    }
-
-    res.json({
-      success: true,
-      firs
-    });
-
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: "Server error"
-    });
-  }
-});
 module.exports = router;

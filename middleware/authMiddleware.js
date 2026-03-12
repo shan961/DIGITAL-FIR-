@@ -4,10 +4,10 @@ module.exports = function (req, res, next) {
 
   const authHeader = req.headers.authorization;
 
-  if (!authHeader) {
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
     return res.status(401).json({
       success: false,
-      message: "No token provided"
+      message: "Token missing or malformed"
     });
   }
 
@@ -17,7 +17,7 @@ module.exports = function (req, res, next) {
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-    req.user = decoded;   // contains id + role
+    req.user = decoded;
 
     next();
 
@@ -25,7 +25,7 @@ module.exports = function (req, res, next) {
 
     return res.status(401).json({
       success: false,
-      message: "Invalid token"
+      message: "Invalid or expired token"
     });
 
   }

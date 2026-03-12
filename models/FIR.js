@@ -1,46 +1,30 @@
 const mongoose = require("mongoose");
 
 const FIRSchema = new mongoose.Schema({
-  name: {
-    type: String,
-    required: true
-  },
-  crimeType: {
-    type: String,
-    required: true
-  },
-  description: {
-    type: String,
-    required: true
-  },
-  location: String,
-  date: String,
-  time: String,
+
+  name: String,
+
+  crimeType: String,
+
+  description: String,
 
   sectionsApplied: [String],
 
-  firDraft: {
-    type: String,
+  firDraft: String,
+
+  user: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "User",
     required: true
   },
 
- statusHistory: [
-  {
-    from: String,
-    to: String,
-    updatedAt: {
-      type: Date,
-      default: Date.now
-    },
-    updatedBy: String
-  }
-]
-,
+  statusHistory: [
+    {
+      status: String,
+      date: { type: Date, default: Date.now }
+    }
+  ]
 
-  createdAt: {
-    type: Date,
-    default: Date.now
-  }
-});
+}, { timestamps: true });
 
 module.exports = mongoose.model("FIR", FIRSchema);
